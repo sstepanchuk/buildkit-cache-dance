@@ -1,34 +1,60 @@
 import spawnPlease from 'spawn-please'
 import cp, { type ChildProcess } from 'child_process';
+import { logError, logVerbose } from './logger.js';
 
 export async function run(command: string, args: string[]) {
+    const commandString = formatCommand(command, args);
+    logVerbose(`Executing command: ${commandString}`);
     try {
-        return await spawnPlease(command, args);
+        const result = await spawnPlease(command, args);
+        logVerbose(`Command succeeded: ${commandString}`);
+        return result;
     } catch (error) {
-        console.error(`Error running command: ${command} ${args.join(' ')}`);
+        logError(`Error running command: ${commandString}`);
+        if (error instanceof Error && error.stack) {
+            logVerbose(error.stack);
+        }
         throw error;
     }
 }
 
 export async function runPiped([command1, args1]: [string, string[]], [command2, args2]: [string, string[]]) {
+    const commandString = `${formatCommand(command1, args1)} | ${formatCommand(command2, args2)}`;
+    logVerbose(`Executing piped command: ${commandString}`);
     const cp1 = cp.spawn(command1, args1, { stdio: ['inherit', 'pipe', 'inherit'] });
     const cp2 = cp.spawn(command2, args2, { stdio: ['pipe', 'inherit', 'inherit'] });
 
     cp1.stdout.pipe(cp2.stdin);
 
-    await Promise.all([assertSuccess(cp1), assertSuccess(cp2)]);
+    await Promise.all([
+        assertSuccess(cp1, formatCommand(command1, args1)),
+        assertSuccess(cp2, formatCommand(command2, args2)),
+    ]);
+
+    logVerbose(`Piped command succeeded: ${commandString}`);
 }
 
-function assertSuccess(cp: ChildProcess) {
+function assertSuccess(cp: ChildProcess, command: string) {
     return new Promise<void>((resolve, reject) => {
         cp.on('error', (error) => {
+            logError(`Process error: ${command}`);
+            if (error instanceof Error && error.stack) {
+                logVerbose(error.stack);
+            }
             reject(error);
         });
         cp.on('close', (code) => {
             if (code !== 0) {
-                reject(new Error(`process exited with code ${code}`));
+                const error = new Error(`process exited with code ${code}`);
+                logError(`${command} failed: ${error.message}`);
+                reject(error);
             }
+            logVerbose(`Process exited successfully: ${command}`);
             resolve();
         });
     });
+}
+
+function formatCommand(command: string, args: string[]) {
+    return [command, ...args].join(' ').trim();
 }

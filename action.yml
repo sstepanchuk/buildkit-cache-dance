@@ -30,6 +30,9 @@ inputs:
   builder:
     default: default
     description: "The name of the builder. Default: 'default'"
+  verbose:
+    default: "false"
+    description: "Enable verbose logging output"
 runs:
   using: 'node20'
   main: 'dist/index.js'

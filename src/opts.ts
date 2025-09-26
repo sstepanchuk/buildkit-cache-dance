@@ -2,6 +2,7 @@ import mri from 'mri';
 import { promises as fs } from 'fs';
 import { getInput, warning } from '@actions/core/lib/core.js';
 import { DockerfileParser, ModifiableInstruction } from 'dockerfile-ast';
+import { logInfo, logVerbose } from './logger.js';
 
 export type Opts = {
   "extract": boolean
@@ -12,6 +13,7 @@ export type Opts = {
   "skip-extraction": boolean
   "utility-image": string
   "builder"?: string
+  "verbose": boolean
   help: boolean
   /** @deprecated Use `cache-map` instead */
   "cache-source"?: string
@@ -30,10 +32,11 @@ export function parseOpts(args: string[]): mri.Argv<Opts> {
       "extract": process.env[`STATE_POST`] !== undefined,
       "utility-image": getInput("utility-image") || "ghcr.io/containerd/busybox:latest",
       "builder": getInput("builder") || "default",
+      "verbose": (getInput("verbose") || "false") === "true",
       "help": false,
     },
     string: ["cache-map", "dockerfile", "cache-dir", "scratch-dir", "cache-source", "cache-target", "utility-image", "builder"],
-    boolean: ["skip-extraction", "help", "extract"],
+    boolean: ["skip-extraction", "help", "extract", "verbose"],
     alias: {
       "help": ["h"],
     },
@@ -63,6 +66,7 @@ Options:
   --skip-extraction  Skip the extraction of the cache from the docker container
   --utility-image  The container image to use for injecting and extracting the cache. Default: 'ghcr.io/containerd/busybox:latest'
   --builder      The name of the buildx builder to use for the cache injection
+  --verbose      Enable verbose logging output
   --help         Show this help
 `);
 }
@@ -117,9 +121,9 @@ export async function getCacheMap(opts: Opts): Promise<CacheMap> {
       return cacheMap;
     }
 
-    console.log(`No cache map provided. Trying to parse the Dockerfile to find the cache mount instructions...`);
+    logInfo(`No cache map provided. Trying to parse the Dockerfile to find the cache mount instructions...`);
     const cacheMapFromDockerfile = await getCacheMapFromDockerfile(opts["dockerfile"], opts["cache-dir"]);
-    console.log(`Cache map parsed from Dockerfile: ${JSON.stringify(cacheMapFromDockerfile)}`);
+    logVerbose(`Cache map parsed from Dockerfile: ${JSON.stringify(cacheMapFromDockerfile)}`);
     return cacheMapFromDockerfile;
   } catch (e) {
     throw new Error(`Failed to parse cache map. Expected JSON, got:\n${opts["cache-map"]}\n${e}`);

@@ -15,7 +15,8 @@ test('parseOpts with no arguments', () => {
         "h": false,
         "help": false,
         "utility-image": "ghcr.io/containerd/busybox:latest",
-        "builder": "default"
+        "builder": "default",
+        "verbose": false,
     })
 })
 
@@ -32,7 +33,8 @@ test('parseOpts with cache-map argument', () => {
         "h": false,
         "help": false,
         "utility-image": "ghcr.io/containerd/busybox:latest",
-        "builder": "default"
+        "builder": "default",
+        "verbose": false,
     })
 })
 
@@ -51,7 +53,8 @@ test('parseOpts with deprecated cache-source and cache-target arguments', () => 
         "cache-source": 'source',
         "cache-target": 'target',
         "utility-image": "ghcr.io/containerd/busybox:latest",
-        "builder": "default"
+        "builder": "default",
+        "verbose": false,
     })
 })
 
@@ -68,7 +71,8 @@ test('parseOpts with utility-image argument', () => {
         "h": false,
         "help": false,
         "utility-image": "alpine:1",
-        "builder": "default"
+        "builder": "default",
+        "verbose": false,
     })
 })
 
@@ -85,7 +89,8 @@ test('parseOpts with builder argument', () => {
         "h": false,
         "help": false,
         "utility-image": "ghcr.io/containerd/busybox:latest",
-        "builder": "another-builder"
+        "builder": "another-builder",
+        "verbose": false,
     })
 })
 
@@ -102,7 +107,8 @@ test('parseOpts with dockerfile argument', () => {
         "h": false,
         "help": false,
         "utility-image": "ghcr.io/containerd/busybox:latest",
-        "builder": "default"
+        "builder": "default",
+        "verbose": false,
     })
 })
 
@@ -119,7 +125,8 @@ test('parseOpts with cache-dir argument', () => {
         "h": false,
         "help": false,
         "utility-image": "ghcr.io/containerd/busybox:latest",
-        "builder": "default"
+        "builder": "default",
+        "verbose": false,
     })
 })
 
@@ -136,7 +143,26 @@ test('parseOpts with help argument', () => {
         "h": true,
         "help": true,
         "utility-image": "ghcr.io/containerd/busybox:latest",
-        "builder": "default"
+        "builder": "default",
+        "verbose": false,
+    })
+})
+
+test('parseOpts with verbose argument', () => {
+    const opts = parseOpts(['--verbose'])
+    expect(opts).toEqual({
+        "_": [],
+        "cache-map": "{}",
+        "dockerfile": "Dockerfile",
+        "cache-dir": null,
+        "scratch-dir": "scratch",
+        "skip-extraction": false,
+        "extract": false,
+        "h": false,
+        "help": false,
+        "utility-image": "ghcr.io/containerd/busybox:latest",
+        "builder": "default",
+        "verbose": true,
     })
 })
 
