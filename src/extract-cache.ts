@@ -1,7 +1,7 @@
 import { promises as fs } from 'fs';
 import path from 'path';
 import { CacheOptions, Opts, getCacheMap, getMountArgsString, getTargetPath, getBuilder } from './opts.js';
-import { run, runPiped } from './run.js';
+import { run } from './run.js';
 
 function createJobId(cacheSource: string): string {
     const slug = cacheSource
@@ -17,9 +17,8 @@ function createJobId(cacheSource: string): string {
 async function extractCache(cacheSource: string, cacheOptions: CacheOptions, scratchDir: string, containerImage: string, builder: string) {
     const jobId = createJobId(cacheSource);
     const jobScratchDir = path.join(scratchDir, jobId);
+    const jobOutputDir = path.join(jobScratchDir, 'output');
     const dancefilePath = path.join(jobScratchDir, 'Dancefile.extract');
-    const imageTag = `dance:extract-${jobId}`;
-    const containerName = `cache-container-${jobId}`;
 
     // Prepare Timestamp for Layer Cache Busting
     const date = new Date().toISOString();
@@ -33,42 +32,41 @@ async function extractCache(cacheSource: string, cacheOptions: CacheOptions, scr
     const mountArgs = getMountArgsString(cacheOptions);
 
     const dancefileContent = `
-FROM ${containerImage}
+FROM ${containerImage} AS dance-extract
 COPY buildstamp buildstamp
 RUN --mount=${mountArgs} \
     mkdir -p /var/dance-cache/ \
     && cp -p -R ${targetPath}/. /var/dance-cache/ || true
+FROM scratch
+COPY --from=dance-extract /var/dance-cache /cache
 `;
     await fs.writeFile(dancefilePath, dancefileContent);
     console.log(dancefileContent);
 
-    // Extract Data into Docker Image
-    await run('docker', ['buildx', 'build', '--builder', builder, '-f', dancefilePath, '--tag', imageTag, '--load', jobScratchDir]);
-
-    // Create Extraction Image
-    try {
-        await run('docker', ['rm', '-f', containerName]);
-    } catch (error) {
-        // Ignore error if container does not exist
-    }
-    await run('docker', ['create', '-ti', '--name', containerName, imageTag]);
-
-    // Unpack Docker Image into Scratch
-    await runPiped(
-        ['docker', ['cp', '-L', `${containerName}:/var/dance-cache`, '-']],
-        ['tar', ['-H', 'posix', '-x', '-C', jobScratchDir]]
-    );
+    await fs.rm(jobOutputDir, { recursive: true, force: true });
+    await fs.mkdir(jobOutputDir, { recursive: true });
+    await run('docker', [
+        'buildx',
+        'build',
+        '--builder', builder,
+        '-f', dancefilePath,
+        '--output', `type=local,dest=${jobOutputDir}`,
+        jobScratchDir,
+    ]);
 
     // Move Cache into Its Place
+    const cacheStagePath = path.join(jobOutputDir, 'cache');
+    await fs.mkdir(path.dirname(cacheSource), { recursive: true });
     await run('sudo', ['rm', '-rf', cacheSource]);
-    await fs.rename(path.join(jobScratchDir, 'dance-cache'), cacheSource);
-
     try {
-        await run('docker', ['rm', '-f', containerName]);
+        await fs.rename(cacheStagePath, cacheSource);
     } catch (error) {
-        // Ignore error if container removal fails
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+            await fs.mkdir(cacheSource, { recursive: true });
+        } else {
+            throw error;
+        }
     }
-
     await fs.rm(jobScratchDir, { recursive: true, force: true });
 }
 
