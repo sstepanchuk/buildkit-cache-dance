@@ -4,10 +4,25 @@ import { CacheOptions, Opts, getCacheMap, getMountArgsString, getTargetPath, get
 import { run } from './run.js';
 import { notice } from '@actions/core/lib/core.js';
 
+function createJobId(cacheSource: string): string {
+    const slug = cacheSource
+        .replace(/^[\\/]+/, '')
+        .replace(/[\\/]+/g, '-')
+        .replace(/[^a-zA-Z0-9_.-]/g, '-')
+        .toLowerCase()
+        .slice(-40);
+    const unique = Math.random().toString(36).slice(2, 10);
+    return `${slug || 'cache'}-${unique}`;
+}
+
 async function injectCache(cacheSource: string, cacheOptions: CacheOptions, scratchDir: string, containerImage: string, builder: string) {
-    // Clean Scratch Directory
-    await fs.rm(scratchDir, { recursive: true, force: true });
-    await fs.mkdir(scratchDir, { recursive: true });
+    const jobId = createJobId(cacheSource);
+    const jobScratchDir = path.join(scratchDir, jobId);
+    const dancefilePath = path.join(jobScratchDir, 'Dancefile.inject');
+    const imageTag = `dance:inject-${jobId}`;
+
+    await fs.rm(jobScratchDir, { recursive: true, force: true });
+    await fs.mkdir(jobScratchDir, { recursive: true });
 
     // Prepare Cache Source Directory
     await fs.mkdir(cacheSource, { recursive: true });
@@ -35,11 +50,11 @@ RUN --mount=${mountArgs} \
     --mount=type=bind,source=.,target=/var/dance-cache \
     cp -p -R /var/dance-cache/. ${targetPath} ${ownershipCommand} || true
 `;
-    await fs.writeFile(path.join(scratchDir, 'Dancefile.inject'), dancefileContent);
+    await fs.writeFile(dancefilePath, dancefileContent);
     console.log(dancefileContent);
 
     // Inject Data into Docker Cache
-    await run('docker', ['buildx', 'build', '--builder', builder ,'-f', path.join(scratchDir, 'Dancefile.inject'), '--tag', 'dance:inject', cacheSource]);
+    await run('docker', ['buildx', 'build', '--builder', builder ,'-f', dancefilePath, '--tag', imageTag, cacheSource]);
 
     // Clean Directories
     try {
@@ -48,6 +63,8 @@ RUN --mount=${mountArgs} \
         // Ignore Cleaning Errors
         notice(`Error while cleaning cache source directory: ${err}. Ignoring...`);
     }
+
+    await fs.rm(jobScratchDir, { recursive: true, force: true });
 }
 
 
@@ -58,7 +75,7 @@ export async function injectCaches(opts: Opts) {
 
     const builder = getBuilder(opts);
     // Inject Caches for each source-target pair
-    for (const [cacheSource, cacheOptions] of Object.entries(cacheMap)) {
-        await injectCache(cacheSource, cacheOptions, scratchDir, containerImage, builder);
-    }
+    await Promise.all(Object.entries(cacheMap).map(([cacheSource, cacheOptions]) =>
+        injectCache(cacheSource, cacheOptions, scratchDir, containerImage, builder)
+    ));
 }
