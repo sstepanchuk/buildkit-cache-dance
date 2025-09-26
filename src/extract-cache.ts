@@ -1,7 +1,7 @@
 import { promises as fs } from 'fs';
 import path from 'path';
 import { CacheOptions, Opts, getCacheMap, getMountArgsString, getTargetPath, getBuilder } from './opts.js';
-import { run } from './run.js';
+import { run, runWithInput } from './run.js';
 import { endLogGroup, logError, logInfo, logVerbose, logWarning, startLogGroup } from './logger.js';
 
 function createJobId(cacheSource: string): string {
@@ -19,7 +19,6 @@ async function extractCache(cacheSource: string, cacheOptions: CacheOptions, scr
     const jobId = createJobId(cacheSource);
     const jobScratchDir = path.join(scratchDir, jobId);
     const jobOutputDir = path.join(jobScratchDir, 'output');
-    const dancefilePath = path.join(jobScratchDir, 'Dancefile.extract');
 
     startLogGroup(`Extract cache from ${cacheSource}`);
     logInfo(`Preparing cache extraction for source '${cacheSource}' using builder '${builder}'.`);
@@ -29,7 +28,8 @@ async function extractCache(cacheSource: string, cacheOptions: CacheOptions, scr
 
     await fs.rm(jobScratchDir, { recursive: true, force: true });
     await fs.mkdir(jobScratchDir, { recursive: true });
-    await fs.writeFile(path.join(jobScratchDir, 'buildstamp'), date);
+    const buildstampPath = path.join(jobScratchDir, 'buildstamp');
+    await fs.writeFile(buildstampPath, date);
     logVerbose(`Scratch directory initialized at '${jobScratchDir}' with buildstamp ${date}.`);
 
     // Prepare Dancefile to Access Caches
@@ -45,20 +45,19 @@ RUN --mount=${mountArgs} \
 FROM scratch
 COPY --from=dance-extract /var/dance-cache /cache
 `;
-    await fs.writeFile(dancefilePath, dancefileContent);
-    logVerbose(`Dancefile for extraction written to '${dancefilePath}':\n${dancefileContent}`);
+    logVerbose(`Dancefile for extraction generated:\n${dancefileContent}`);
 
     await fs.rm(jobOutputDir, { recursive: true, force: true });
     await fs.mkdir(jobOutputDir, { recursive: true });
     logVerbose(`Output directory prepared at '${jobOutputDir}'.`);
-    await run('docker', [
+    await runWithInput('docker', [
         'buildx',
         'build',
         '--builder', builder,
-        '-f', dancefilePath,
+        '-f', '-',
         '--output', `type=local,dest=${jobOutputDir}`,
         jobScratchDir,
-    ]);
+    ], dancefileContent);
 
     // Move Cache into Its Place
     const cacheStagePath = path.join(jobOutputDir, 'cache');

@@ -34,6 +34,29 @@ export async function runPiped([command1, args1]: [string, string[]], [command2,
     logVerbose(`Piped command succeeded: ${commandString}`);
 }
 
+export async function runWithInput(command: string, args: string[], input: string) {
+    const commandString = formatCommand(command, args);
+    logVerbose(`Executing command with stdin: ${commandString}`);
+    const child = cp.spawn(command, args, { stdio: ['pipe', 'inherit', 'inherit'] });
+
+    child.stdin.on('error', (error) => {
+        logError(`Failed to write to stdin for ${commandString}: ${error}`);
+    });
+
+    child.stdin.write(input);
+    child.stdin.end();
+
+    try {
+        await assertSuccess(child, commandString);
+        logVerbose(`Command with stdin succeeded: ${commandString}`);
+    } catch (error) {
+        if (error instanceof Error && error.stack) {
+            logVerbose(error.stack);
+        }
+        throw error;
+    }
+}
+
 function assertSuccess(cp: ChildProcess, command: string) {
     return new Promise<void>((resolve, reject) => {
         cp.on('error', (error) => {

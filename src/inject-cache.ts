@@ -1,7 +1,7 @@
 import { promises as fs } from "fs";
 import path from 'path';
 import { CacheOptions, Opts, getCacheMap, getMountArgsString, getTargetPath, getUID, getGID, getBuilder } from './opts.js';
-import { run } from './run.js';
+import { run, runWithInput } from './run.js';
 import { endLogGroup, logInfo, logNotice, logVerbose, logWarning, startLogGroup } from './logger.js';
 
 function createJobId(cacheSource: string): string {
@@ -18,7 +18,6 @@ function createJobId(cacheSource: string): string {
 async function injectCache(cacheSource: string, cacheOptions: CacheOptions, scratchDir: string, containerImage: string, builder: string) {
     const jobId = createJobId(cacheSource);
     const jobScratchDir = path.join(scratchDir, jobId);
-    const dancefilePath = path.join(jobScratchDir, 'Dancefile.inject');
     const imageTag = `dance:inject-${jobId}`;
 
     startLogGroup(`Inject cache for ${cacheSource}`);
@@ -56,12 +55,11 @@ RUN --mount=${mountArgs} \
     --mount=type=bind,source=.,target=/var/dance-cache \
     cp -p -R /var/dance-cache/. ${targetPath} ${ownershipCommand} || true
 `;
-    await fs.writeFile(dancefilePath, dancefileContent);
-    logVerbose(`Dancefile for injection written to '${dancefilePath}':\n${dancefileContent}`);
+    logVerbose(`Dancefile for injection generated:\n${dancefileContent}`);
 
     // Inject Data into Docker Cache
     logInfo(`Running docker buildx to inject cache for '${cacheSource}'.`);
-    await run('docker', ['buildx', 'build', '--builder', builder ,'-f', dancefilePath, '--tag', imageTag, cacheSource]);
+    await runWithInput('docker', ['buildx', 'build', '--builder', builder ,'-f', '-', '--tag', imageTag, cacheSource], dancefileContent);
 
     // Clean Directories
     try {
