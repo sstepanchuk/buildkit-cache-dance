@@ -99,34 +99,11 @@ export function logVerbose(message: string) {
     }
 }
 
-export function startLogGroup(title: string) {
-    callCore(
-        () => coreStartGroup(title),
-        () => logInfo(title)
-    );
-}
-
-export function endLogGroup() {
-    callCore(
-        () => coreEndGroup(),
-        () => undefined
-    );
-}
-
 async function createNativeGroup<T>(
     name: string,
     fn: () => Promise<T>
 ): Promise<T> {
-    startLogGroup(name);
-    try {
-        // Run the function within the group context
-        const result = await groupContext.run(name, fn);
-        endLogGroup();
-        return result;
-    } catch (error) {
-        endLogGroup();
-        throw error;
-    }
+  return groupContext.run(name, fn);
 }
 
 export async function logGroup<T>(
