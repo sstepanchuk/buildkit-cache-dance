@@ -2,7 +2,7 @@ import { promises as fs } from "fs";
 import path from 'path';
 import { CacheOptions, Opts, getCacheMap, getMountArgsString, getTargetPath, getUID, getGID, getBuilder } from './opts.js';
 import { run, runWithInput } from './run.js';
-import { endLogGroup, logInfo, logNotice, logVerbose, logWarning, startLogGroup } from './logger.js';
+import { logGroup, logInfo, logNotice, logVerbose, logWarning } from './logger.js';
 
 function createJobId(cacheSource: string): string {
     const slug = cacheSource
@@ -16,63 +16,62 @@ function createJobId(cacheSource: string): string {
 }
 
 async function injectCache(cacheSource: string, cacheOptions: CacheOptions, scratchDir: string, containerImage: string, builder: string) {
-    const jobId = createJobId(cacheSource);
-    const jobScratchDir = path.join(scratchDir, jobId);
-    const imageTag = `dance:inject-${jobId}`;
+    return await logGroup(`Inject cache for ${cacheSource}`, async () => {
+        const jobId = createJobId(cacheSource);
+        const jobScratchDir = path.join(scratchDir, jobId);
+        const imageTag = `dance:inject-${jobId}`;
 
-    startLogGroup(`Inject cache for ${cacheSource}`);
+        logInfo(`Preparing cache injection for source '${cacheSource}' using builder '${builder}'.`);
 
-    logInfo(`Preparing cache injection for source '${cacheSource}' using builder '${builder}'.`);
+        await fs.rm(jobScratchDir, { recursive: true, force: true });
+        await fs.mkdir(jobScratchDir, { recursive: true });
 
-    await fs.rm(jobScratchDir, { recursive: true, force: true });
-    await fs.mkdir(jobScratchDir, { recursive: true });
+        // Prepare Cache Source Directory
+        await fs.mkdir(cacheSource, { recursive: true });
+        logVerbose(`Working directory prepared at '${cacheSource}'.`);
 
-    // Prepare Cache Source Directory
-    await fs.mkdir(cacheSource, { recursive: true });
-    logVerbose(`Working directory prepared at '${cacheSource}'.`);
+        // Prepare Timestamp for Layer Cache Busting
+        const date = new Date().toISOString();
+        await fs.writeFile(path.join(cacheSource, 'buildstamp'), date);
+        logVerbose(`Build timestamp written for cache busting: ${date}.`);
 
-    // Prepare Timestamp for Layer Cache Busting
-    const date = new Date().toISOString();
-    await fs.writeFile(path.join(cacheSource, 'buildstamp'), date);
-    logVerbose(`Build timestamp written for cache busting: ${date}.`);
+        const targetPath = getTargetPath(cacheOptions);
+        const mountArgs = getMountArgsString(cacheOptions);
 
-    const targetPath = getTargetPath(cacheOptions);
-    const mountArgs = getMountArgsString(cacheOptions);
+        // If UID OR GID are set, then add chown to restore files ownership.
+        let ownershipCommand = "";
+        const uid = getUID(cacheOptions);
+        const gid = getGID(cacheOptions);
+        if (uid !== "" || gid !== "") {
+            ownershipCommand = `&& chown -R ${uid}:${gid} ${targetPath}`
+        }
 
-    // If UID OR GID are set, then add chown to restore files ownership.
-    let ownershipCommand = "";
-    const uid = getUID(cacheOptions);
-    const gid = getGID(cacheOptions);
-    if (uid !== "" || gid !== "") {
-        ownershipCommand = `&& chown -R ${uid}:${gid} ${targetPath}`
-    }
-
-    // Prepare Dancefile to Access Caches
-    const dancefileContent = `
+        // Prepare Dancefile to Access Caches
+        const dancefileContent = `
 FROM ${containerImage}
 COPY buildstamp buildstamp
 RUN --mount=${mountArgs} \
     --mount=type=bind,source=.,target=/var/dance-cache \
     cp -p -R /var/dance-cache/. ${targetPath} ${ownershipCommand} || true
 `;
-    logVerbose(`Dancefile for injection generated:\n${dancefileContent}`);
+        logVerbose(`Dancefile for injection generated:\n${dancefileContent}`);
 
-    // Inject Data into Docker Cache
-    logInfo(`Running docker buildx to inject cache for '${cacheSource}'.`);
-    await runWithInput('docker', ['buildx', 'build', '--builder', builder ,'-f', '-', '--tag', imageTag, cacheSource], dancefileContent);
+        // Inject Data into Docker Cache
+        logInfo(`Running docker buildx to inject cache for '${cacheSource}'.`);
+        await runWithInput('docker', ['buildx', 'build', '--builder', builder ,'-f', '-', '--tag', imageTag, cacheSource], dancefileContent);
 
-    // Clean Directories
-    try {
-        await fs.rm(cacheSource, { recursive: true, force: true });
-    } catch (err) {
-        // Ignore Cleaning Errors
-        logNotice(`Error while cleaning cache source directory at '${cacheSource}': ${err}. Ignoring...`);
-    }
+        // Clean Directories
+        try {
+            await fs.rm(cacheSource, { recursive: true, force: true });
+        } catch (err) {
+            // Ignore Cleaning Errors
+            logNotice(`Error while cleaning cache source directory at '${cacheSource}': ${err}. Ignoring...`);
+        }
 
-    await fs.rm(jobScratchDir, { recursive: true, force: true });
+        await fs.rm(jobScratchDir, { recursive: true, force: true });
 
-    logInfo(`Cache injection completed for source '${cacheSource}'.`);
-    endLogGroup();
+        logInfo(`Cache injection completed for source '${cacheSource}'.`);
+    });
 }
 
 
