@@ -1,66 +1,49 @@
 import { promises as fs } from 'fs';
 import path from 'path';
 import { CacheOptions, Opts, getCacheMap, getMountArgsString, getTargetPath, getBuilder } from './opts.js';
-import { run, runWithInput } from './run.js';
-import { endLogGroup, logError, logInfo, logVerbose, logWarning, startLogGroup } from './logger.js';
-
-function createJobId(cacheSource: string): string {
-    const slug = cacheSource
-        .replace(/^[\\/]+/, '')
-        .replace(/[\\/]+/g, '-')
-        .replace(/[^a-zA-Z0-9_.-]/g, '-')
-        .toLowerCase()
-        .slice(-40);
-    const unique = Math.random().toString(36).slice(2, 10);
-    return `${slug || 'cache'}-${unique}`;
-}
+import { run, runWithInput, runPiped } from './run.js';
+import { logError, logInfo, logVerbose, logWarning } from './logger.js';
 
 async function extractCache(cacheSource: string, cacheOptions: CacheOptions, scratchDir: string, containerImage: string, builder: string) {
-    const jobId = createJobId(cacheSource);
-    const jobScratchDir = path.join(scratchDir, jobId);
-    const jobOutputDir = path.join(jobScratchDir, 'output');
-
-    startLogGroup(`Extract cache from ${cacheSource}`);
     logInfo(`Preparing cache extraction for source '${cacheSource}' using builder '${builder}'.`);
 
     // Prepare Timestamp for Layer Cache Busting
     const date = new Date().toISOString();
 
-    await fs.rm(jobScratchDir, { recursive: true, force: true });
-    await fs.mkdir(jobScratchDir, { recursive: true });
-    const buildstampPath = path.join(jobScratchDir, 'buildstamp');
-    await fs.writeFile(buildstampPath, date);
-    logVerbose(`Scratch directory initialized at '${jobScratchDir}' with buildstamp ${date}.`);
+    await fs.mkdir(scratchDir, { recursive: true });
+    await fs.writeFile(path.join(scratchDir, 'buildstamp'), date);
 
     // Prepare Dancefile to Access Caches
     const targetPath = getTargetPath(cacheOptions);
     const mountArgs = getMountArgsString(cacheOptions);
 
     const dancefileContent = `
-FROM ${containerImage} AS dance-extract
+FROM ${containerImage}
 COPY buildstamp buildstamp
 RUN --mount=${mountArgs} \
     mkdir -p /var/dance-cache/ \
     && cp -p -R ${targetPath}/. /var/dance-cache/ || true
-FROM scratch
-COPY --from=dance-extract /var/dance-cache /cache
 `;
     logVerbose(`Dancefile for extraction generated:\n${dancefileContent}`);
 
-    await fs.rm(jobOutputDir, { recursive: true, force: true });
-    await fs.mkdir(jobOutputDir, { recursive: true });
-    logVerbose(`Output directory prepared at '${jobOutputDir}'.`);
-    await runWithInput('docker', [
-        'buildx',
-        'build',
-        '--builder', builder,
-        '-f', '-',
-        '--output', `type=local,dest=${jobOutputDir}`,
-        jobScratchDir,
-    ], dancefileContent);
+    // Extract Data into Docker Image
+    await runWithInput('docker', ['buildx', 'build', '--builder', builder, '-f', '-', '--tag', 'dance:extract', '--load', scratchDir], dancefileContent);
+
+    // Create Extraction Container
+    try {
+        await run('docker', ['rm', '-f', 'cache-container']);
+    } catch (error) {
+        // Ignore error if container does not exist
+    }
+    await run('docker', ['create', '-ti', '--name', 'cache-container', 'dance:extract']);
+
+    // Unpack Docker Image into Scratch
+    await runPiped(
+        ['docker', ['cp', '-L', 'cache-container:/var/dance-cache', '-']],
+        ['tar', ['-H', 'posix', '-x', '-C', scratchDir]]
+    );
 
     // Move Cache into Its Place
-    const cacheStagePath = path.join(jobOutputDir, 'cache');
     await fs.mkdir(path.dirname(cacheSource), { recursive: true });
     try {
         await run('sudo', ['rm', '-rf', cacheSource]);
@@ -74,19 +57,18 @@ COPY --from=dance-extract /var/dance-cache /cache
         }
     }
     try {
-        await fs.rename(cacheStagePath, cacheSource);
+        await fs.rename(path.join(scratchDir, 'dance-cache'), cacheSource);
     } catch (error) {
         if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
             await fs.mkdir(cacheSource, { recursive: true });
             logVerbose(`Cache extraction produced no files for '${cacheSource}'. Directory created.`);
         } else {
-            logError(`Failed to move extracted cache from '${cacheStagePath}' to '${cacheSource}': ${error}`);
+            logError(`Failed to move extracted cache from '${path.join(scratchDir, 'dance-cache')}' to '${cacheSource}': ${error}`);
             throw error;
         }
     }
-    await fs.rm(jobScratchDir, { recursive: true, force: true });
+    
     logInfo(`Cache extraction completed for source '${cacheSource}'.`);
-    endLogGroup();
 }
 
 export async function extractCaches(opts: Opts) {
